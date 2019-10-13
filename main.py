@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import os
 import re
 import sys
@@ -198,7 +200,7 @@ def _last_n_season_matches(comands, comand, n_seasons, datefrom=None):
 
     data = []
     season = date2season(datefrom)
-    target_year = get_season_year(season) - n_seasons
+    target_year = get_season_year(season) - n_seasons + 1
 
     for match in comands[comand]["matches"]:
         mseason = match[-2]
@@ -392,22 +394,18 @@ def write_stat(stat, stat_file):
             f.write(", ".join([str(i) for i in s])+"\n")
 
 def main():
-    #if os.path.exists(json_file):
-    #    leagues = json.loads(json_file)
-    #    update_data(leagues)
+    if os.path.exists(json_file):
+        leagues = json.loads(json_file)
+        update_data(leagues)
 
-    #else:
-    if True:
+    else:
         leagues = load_leagues_info()
         load_data_n_seasons(leagues, load_n_seasons)
         
         with open(json_file, "w") as f:
             f.write(json.dumps(leagues))
 
-    print(leagues['Israel']['Ligat HaAl']["matches"])
-
     comands = get_comands_info(leagues)
-    print(comands['Maccabi Haifa']["matches"])
 
     draw_stat = calc_draw_stat(comands)
     write_stat(draw_stat, stat_file)
