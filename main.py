@@ -194,7 +194,7 @@ def get_comands_info(leagues):
                     comands[comand2].setdefault("future", list())
 
                     data1 = (league, country, comand2, match[2], match[0])
-                    data2 = (league, country, comand2, match[2], match[0])
+                    data2 = (league, country, comand1, match[2], match[0])
 
                     comands[comand1]["future"].append(data1)
                     comands[comand2]["future"].append(data2)
@@ -251,7 +251,7 @@ def update_data(leagues):
     if season != last_season:
         year = get_season_year(season)
         last_year = get_season_year(last_season)
-        _load_data_n_seasons(new_leagues, year-last_year)
+        load_data_n_seasons(new_leagues, year-last_year)
     
     else:
         _leagues_get_matches(new_leagues, season)
@@ -292,7 +292,33 @@ def filter_comands(comands):
             core_comands.add(comand)
     return core_comands
 
-def calc_draw_stat(comands, n_seasons=4):
+def get_meeting_stat(comands, comand1, comand2):
+    if "matches" in comands[comand1]:
+        matches = comands[comand1]["matches"]
+    else:
+        return (0, 0, 0)
+    
+    matches = list(filter(lambda x: x[2] == comand2, matches))
+    
+    if not len(matches):
+        return (0, 0, 0)
+    
+    wins = 0
+    loses = 0
+    draws = 0
+    
+    for match in matches:
+        score1, score2 = match[-3]
+        if score1 > score2:
+            wins += 1
+        elif score1 < score2:
+            loses += 1
+        else:
+            draws += 1
+    
+    return (wins, loses, draws)
+
+def calc_draw_stat(comands, n_seasons=4, m_matches=5):
     cc = filter_comands(comands)
     draw_stat = list()
 
@@ -333,26 +359,46 @@ def calc_draw_stat(comands, n_seasons=4):
 
         league = data[0][0]
         country = data[0][1]
+        meeting_stat = list()
         
         if "future" in comands[comand]:
             n_future_matches = len(comands[comand]["future"])
+            future_matches = sorted(comands[comand]["future"], key=lambda x: x[-1])
+            opponents = [match[2] for match in future_matches[:m_matches]]
+            
+            for opponent in opponents:
+                ms = get_meeting_stat(comands, comand, opponent)
+                meeting_stat.append("/".join([str(i) for i in ms]))
+    
+            ms_len = len(meeting_stat)
+        
+            for i in range(0, m_matches-ms_len):
+                meeting_stat.append("0/0/0")
+
         else:
             n_future_matches = 0
+            for i in range(0, m_matches):
+                meeting_stat.append("0/0/0")
 
         delta = max_series - curr_series
         mean_draws = float(n_draws)/len(data)
-        dstat = (" ".join((country,league)), comand , max_series, mean_series, curr_series, n_future_matches, delta)
+        dstat = (" ".join((country,league)), comand , max_series, mean_series, curr_series, n_future_matches, delta, *meeting_stat)
 
         draw_stat.append(dstat)
 
     return draw_stat
 
 def write_stat(stat, stat_file):
+    headers = ["Лига", "Команда", "Максимальная серия", "Средняя серия", "Текущая серия", "Игр до конца сезона", "Дельта"]
+    h_len = len(headers)
+    mstat_len = len(stat[0]) - h_len
+    for i in range(0, mstat_len):
+        headers.append("Прошлые встречи {}".format(i+1))
+
     with open(stat_file, "w") as f:
-        f.write("Лига, Команда, Максимальная серия, Средняя серия, Текущая серия, Дельта, Игр до конца сезона\n")
-        
+        f.write(", ".join(headers)+"\n")
         for s in stat:
-            f.write(", ".join([str(i) for i in s]))
+            f.write(", ".join([str(i) for i in s])+"\n")
 
 def main():
     if os.path.exists(json_file):
