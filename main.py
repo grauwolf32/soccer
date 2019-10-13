@@ -302,6 +302,7 @@ def calc_draw_stat(comands, n_seasons=4):
 
         if not len(data):
             infologger.info("No data for comand {}!".format(comand))
+            continue
 
         curr_series = 0
         n_draws  = 0.0
@@ -319,10 +320,10 @@ def calc_draw_stat(comands, n_seasons=4):
         if curr_series:
             draw_series.append(curr_series)
             curr_series = 0
-        
+            
         curr_series = draw_series[0]
         draw_series = draw_series[1:]
-
+        
         if len(draw_series):
             max_series = max(draw_series)
             mean_series = sum(draw_series) / len(draw_series)
@@ -332,7 +333,7 @@ def calc_draw_stat(comands, n_seasons=4):
 
         league = data[0][0]
         country = data[0][1]
-
+        
         if "future" in comands[comand]:
             n_future_matches = len(comands[comand]["future"])
         else:
@@ -340,7 +341,7 @@ def calc_draw_stat(comands, n_seasons=4):
 
         delta = max_series - curr_series
         mean_draws = float(n_draws)/len(data)
-        dstat = (country, league, max_series, mean_series, curr_series, n_future_matches, delta)
+        dstat = (" ".join((country,league)), comand , max_series, mean_series, curr_series, n_future_matches, delta)
 
         draw_stat.append(dstat)
 
