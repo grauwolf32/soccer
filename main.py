@@ -74,32 +74,18 @@ def date2season(date):
 def _is_current_season(season):
     return date2season(datetime.now()) == season
 
-def _future_column_map(columns, season):
-    if len(columns) != 4:
-        error = "Something went wrong!\n\
-                 Got {} columns for the future match record!\n\
-                 Expected: 4 columns".format(len(columns))
-        raise Exception(error)
-
+def _unified_column_map(columns, season):
     date = columns[0].xpath(".//font")[0].text.strip()
     date = season2date(date, season)
     comands = columns[2].text.strip()
+    score = None
 
-    return (date, comands, season)
+    try:
+        score = columns[3].xpath(".//font/b")[0].text.strip()
+    except:
+        pass
 
-def _past_column_map(columns, season):
-    if len(columns) != 5:
-        error = "Something went wrong!\n\
-                 Got {} columns for the future match record!\n\
-                 Expected: 5 columns".format(len(columns))
-        raise Exception(error)
-
-    date = columns[0].xpath(".//font")[0].text.strip()
-    date = season2date(date, season)
-    comands = columns[2].text.strip()
-    score = columns[3].xpath(".//font/b")[0].text.strip()
-
-    return (date, comands, score, season)
+    return (date, comands, season), score
 
 def _leagues_get_matches(leagues, season):
     infologger.info("Loading matches for {} season...".format(season))
@@ -135,13 +121,18 @@ def _leagues_get_matches(leagues, season):
                 n_columns = len(columns)
 
                 try:
-                    if n_columns == 5:
-                        match_data = _past_column_map(columns, season)
-                        matches.append(match_data)
+                    match_data, score = _unified_column_map(columns, season)
+                    if score != None:
+                        matches.append((*match_data, score))
                     
-                    elif n_columns == 4 and is_current_season:
-                        future_data = _future_column_map(columns, season)
-                        future_matches.append(future_data)
+                    else:
+                        match_date = datetime.strptime(match_data[0], "%Y-%m-%d")
+                        is_future = (match_date >= datetime.now())
+
+                        if is_current_season and is_future:
+                            future_matches.append(match_data)
+                        else:
+                            raise Exception()
                 except:
                     infologger.info("Columns doesn't match defined pattern!")
                     infologger.info(etree.tostring(row,  pretty_print=True))
@@ -163,12 +154,12 @@ def get_comands_info(leagues):
                     comand = match[1].split("-")
                     comand1 = comand[0].strip()
                     comand2 = comand[-1].strip()
-                    scores  = match[2].split("-")
+                    scores  = match[-1].split("-")
                     score1  = scores[0].strip()
                     score2  = scores[-1].strip()
 
-                    data1 = (league, country, comand2, (score1, score2), match[3], match[0])
-                    data2 = (league, country, comand1, (score2, score1), match[3], match[0])
+                    data1 = (league, country, comand2, (score1, score2), match[2], match[0])
+                    data2 = (league, country, comand1, (score2, score1), match[2], match[0])
 
                     comands.setdefault(comand1, {"matches" : list()})
                     comands.setdefault(comand2, {"matches" : list()})
@@ -401,18 +392,23 @@ def write_stat(stat, stat_file):
             f.write(", ".join([str(i) for i in s])+"\n")
 
 def main():
-    if os.path.exists(json_file):
-        leagues = json.loads(json_file)
-        update_data(leagues)
+    #if os.path.exists(json_file):
+    #    leagues = json.loads(json_file)
+    #    update_data(leagues)
 
-    else:
+    #else:
+    if True:
         leagues = load_leagues_info()
         load_data_n_seasons(leagues, load_n_seasons)
         
         with open(json_file, "w") as f:
             f.write(json.dumps(leagues))
 
+    print(leagues['Israel']['Ligat HaAl']["matches"])
+
     comands = get_comands_info(leagues)
+    print(comands['Maccabi Haifa']["matches"])
+
     draw_stat = calc_draw_stat(comands)
     write_stat(draw_stat, stat_file)
 
