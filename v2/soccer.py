@@ -1,15 +1,30 @@
 import re
 import time
 import requests
-import datetime
+from datetime import datetime
 
 from requests.sessions import Session
 from lxml.html import HtmlElement
-from fuzzywuzzy import fuzz
+#from fuzzywuzzy import fuzz
 from lxml import html
 
+def requestHandler(func):
+    def wrapper(*args, **kwargs):
+        try:
+            res = func(*args, **kwargs)
+            err = False
+            
+        except Exception as e:
+            print(str(e), *args)
+            
+            res = None
+            err = True
+        return res, err
+            
+    return wrapper
+
 class League(object):
-    def __init__(self, name, country):
+    def __init__(self, name:str, country:str):
         self.name = name
         self.country = country
         
@@ -26,7 +41,7 @@ class League(object):
         return not __eq__(self, other)
         
 class Team(object):
-    def __init__(self, name, country):
+    def __init__(self, name:str, country:str):
         self.name = name
         self.country = country
         
@@ -45,7 +60,7 @@ class Team(object):
         
 class Season(object):
     def __init__(self, year1, year2, leagues=set(), teams=set(), leaguesTeams=list()):
-        self.name = "/".join((str(year1)[:2], str(year2)[:2]))
+        self.name = "/".join((str(year1), str(year2)[2:]))
         self.year1 = year1 
         self.year2 = year2
         self.leagues = leagues
@@ -76,11 +91,12 @@ class Season(object):
             
 
 class Match(object):
-    def __init__(self, team1, team2, date, score, flags=0):
+    def __init__(self, team1: Team, team2: Team, date:datetime, team1Score:int, team2Score:int, flags=0):
         self.team1 = team1
         self.team2 = team2
         self.date = date
-        self.score = score
+        self.team1Score = team1Score
+        self.team2Score = team2Score
         self.flags = flags
         
 def packMatchFlags(isLeague, isCup, isPlayoff, isFriendly, isUpperDivision, isLowerDivision):
@@ -103,6 +119,16 @@ def isCup(match):
     if 1 & match.flags:
         return (1 << 2) & flags
     return -1
+
+def checkLeague(league: League) -> bool:
+    if "лига" in league.name.lower():
+        return True
+    return False
+
+def checkCup(league: League) -> bool:
+    if "кубок" in league.name.lower():
+        return True
+    return False
 
 def isPlayoff(match):
     if 1 & match.flags:
@@ -127,11 +153,36 @@ def isLowerDivision(match):
 def isInternational(match):
     return int(match.team1.country != match.team2.country)
 
-def getSeason(date):
-    currentYear = date.year
-    if date.month <= 6:
-        return "/".join((str(currentYear-1)[2:],str(currentYear)[2:]))
-    return "/".join((str(currentYear)[2:],str(currentYear+1)[2:]))
+def FindTeamByName(teamName:str, teams: list, country=None) -> list:
+    candidates = list()
+    
+    if country:
+        candidates = filter(lambda x: teamName.lower() == x.name.lower() and x.country.lower() == country.lower(), teams)
+        return list(set(candidates))
+    
+    candidates = filter(lambda x: teamName.lower() == x.name.lower(), teams)
+    return list(set(candidates))
+    
+def FindLeagueByName(leagueName: str, leagues:list, country=None) -> list:
+    candidates = list()
+    
+    if country:
+        candidates = filter(lambda x: x.name.lower() == leagueName.lower() and x.country.lower() == country.lower(), leagues)
+        return list(set(candidates))
+    
+    candidates = filter(lambda x: x.name.lower() == leagueName.lower(), leagues)
+    return list(set(candidates))
+
+def FindLeagueByTeam(team: Team, season: Season) -> list:
+    result = filter(lambda x: x[1] == team, season.leaguesTeams)
+    result = [i[0] for i in result]
+    return list(set(result))
+    
+requests.packages.urllib3.disable_warnings()
+userAgent = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:79.0) Gecko/20100101 Firefox/79.0"
+sess = requests.Session()
+sess.headers.update({"User-Agent":userAgent})
+sess.get = requestHandler(sess.get)
 
 def AddUrlParams(url:str, **kwargs) -> str:
     sep = "?"
@@ -176,7 +227,10 @@ def LoadLeagues(url: str, sess:Session, timeout=5) -> (list, dict):
     leagues = list()
     leaguesPathes = dict()
     
-    r = sess.get(url, verify=False, timeout=timeout)
+    r, err = sess.get(url, verify=False, timeout=timeout)
+    if err:
+        return leagues, leaguesPathes
+    
     doc = html.fromstring(r.text)
     
     items = doc.xpath(".//ul[@class=\"countries\"]/li")
@@ -193,8 +247,10 @@ def LoadLeagues(url: str, sess:Session, timeout=5) -> (list, dict):
         leagueName = anchor.text
         leagueLink = anchor.attrib["href"]
         league = League(leagueName, country)
-        leaguesPathes[league] = leagueLink
-        leagues.append(league)
+        
+        if checkLeague(league): # TODO Remove this check with something appropriate
+            leaguesPathes[league] = leagueLink
+            leagues.append(league)
     
     return leagues, leaguesPathes
     
@@ -206,7 +262,10 @@ def LoadLeagueTeams(url: str, timeout=5) -> (list, list):
     teamNames = list()
     teamPathes = list()
     
-    r = sess.get(url, verify=False, timeout=timeout)
+    r, err = sess.get(url, verify=False, timeout=timeout)
+    if err:
+        return [], []
+    
     dataKey = re.findall(extractDataKeyRe, r.text)
     if len(dataKey) == 0:
         print("Could not load data from page {}".format(url))
@@ -220,7 +279,10 @@ def LoadLeagueTeams(url: str, timeout=5) -> (list, list):
         "Referer": url, 
     }
     
-    r = sess.get(newUrl, headers=headers, verify=False, timeout=timeout)
+    r, err = sess.get(newUrl, headers=headers, verify=False, timeout=timeout)
+    if err:
+        return [], []
+    
     doc = html.fromstring(r.text)
     standingsTable = doc.xpath(".//div[contains(@class,\"data_0_all\")]")
 
@@ -241,17 +303,19 @@ def LoadLeagueTeams(url: str, timeout=5) -> (list, list):
         teamNames.append(team.text)
         
     return teamNames, teamPathes
-    
-    
+
 def LoadSeason(leaguesPathes: dict, year1: int, year2:int, timeout=5, delay=1) -> (Season, dict):
     assert(year2 > year1)
     season = Season(year1, year2)
-    seasonName = "/".join((str(year1), str(year2)[2:]))
+    seasonName = season.name
     teamPathes = dict()
 
     for league in leaguesPathes:
-        leagueUrl = JoinUrlPath(base_url, leaguesPathes[league])
-        r = sess.get(leagueUrl, verify=False, timeout=timeout)
+        leagueUrl = JoinUrlPath(baseUrl, leaguesPathes[league])
+        r, err = sess.get(leagueUrl, verify=False, timeout=timeout)
+        if err:
+            continue
+            
         doc = html.fromstring(r.text)
         
         seasonLinkPath = ""
@@ -278,21 +342,115 @@ def LoadSeason(leaguesPathes: dict, year1: int, year2:int, timeout=5, delay=1) -
             
     return season, teamPathes
 
-def ParseMatchTable(table: HtmlElement) -> list:
-    return []
+matchRe = re.compile("(\d{2}\.\d{2}\.\d{4})\s*([^\-]+)\-\s*([^\d]+)\s*(\d)\:(\d)")
+
+def GetAllTextFromHtmlElement(node: HtmlElement, filterFunc=None) -> list:
+    text = list()
+    nodeText = node.text
     
-def LoadTeamMatches(season:Season, teamPathes:dict, leaguesPathes:dict, timeout=5, delay=0.0):
+    if filterFunc:
+        nodeText = filterFunc(nodeText)
+    
+    text.append(nodeText)
+    
+    for childNode in node.getchildren():
+        childNodeText = GetAllTextFromHtmlElement(childNode, filterFunc)
+        if filterFunc:
+            childNodeText = filterFunc(childNodeText)
+        text.append(childNodeText)
+      
+    nodeTail = node.tail
+    
+    if filterFunc:
+        nodeTail = filterFunc(nodeTail)
+    
+    text.append(nodeTail)
+    
+    return " ".join(text)
+
+def MatchFilterFunc(text):
+    if text:
+        filteredText = text.strip("\n\t ")
+        filteredText = text.replace("\n"," ")
+        filteredText = text.replace("\t"," ")
+        filteredText = ' '.join([i.strip("\t\n ") for i in filteredText.split(" ") if i != ""])
+        return filteredText.strip("\n\t ")
+    
+    return ""
+
+def ParseLeagueMatchTable(table: HtmlElement, teams: list) -> list:
+    matches = set()
+    
+    for match in table.xpath(".//tr"):
+        nodes = match.xpath(".//td")
+        if len(nodes) == 0:
+            continue
+      
+        nodeTexts = list()
+        for node in nodes:
+            nodeTexts.append(GetAllTextFromHtmlElement(node, MatchFilterFunc))
+    
+        matchText = "".join(nodeTexts)
+        matchParams = re.findall(matchRe, matchText)
+        
+        if len(matchParams) != 1:
+            print("Could not parse \"{}\"".format(matchText))
+            continue
+            
+        assert(len(matchParams) == 1)
+        matchParams = matchParams[0]
+    
+        date, team1Name, team2Name, team1Score, team2Score = [i.strip() for i in matchParams]
+        date = datetime.strptime(date, "%d.%m.%Y")
+        
+        team1Score = int(team1Score)
+        team2Score = int(team2Score)
+        
+        team1 = FindTeamByName(team1Name, teams)
+  
+        if len(team1) != 1:
+            print("Could not find team1:", team1Name, " ", matchText)
+            continue
+                    
+        # assert(len(team1) == 1)
+        team1 = team1[0]
+                
+        team2 = FindTeamByName(team2Name, teams)
+        if len(team2) != 1:
+            print("Could not find team2:", team2Name, " ", matchText)
+            continue
+                    
+        # assert(len(team2) == 1)
+        team2 = team2[0]    
+        matchFlag = packMatchFlags(True, *([False]*5)) # assume league
+        
+        m = Match(team1, team2, date, team1Score, team2Score, matchFlag)
+        matches.add(m)
+        
+    return list(matches)
+    
+def LoadTeamMatches(season:Season, teamPathes:dict, leaguesPathes:dict, timeout=5, delay=0.2) -> list:
+    matches = set()
+    seasonName = season.name # YYYY/YY
+    
     for team in teamPathes:
         if team not in season.teams:
             continue
             
-        league = list(filter(lambda x: x[1] == team, season.leaguesTeams))
-        assert(len(league) > 0)
+        league = FindLeagueByTeam(team, season)
+        #print([str(i) for i in league])
+        
+        assert(len(league) == 1)
+        league = league[0]
             
         url = JoinUrlPath(baseUrl, teamPathes[team])
-        r = sess.get(leagueUrl, verify=False, timeout=timeout)
+        r, err = sess.get(url, verify=False, timeout=timeout)  
+        if err:
+            continue
+            
         doc = html.fromstring(r.text)
-        
+        time.sleep(delay)
+                
         seasonLinkPath = ""
         options = doc.xpath(".//select[@class=\"sel_season\"]/option")
         for opt in options:
@@ -301,21 +459,47 @@ def LoadTeamMatches(season:Season, teamPathes:dict, leaguesPathes:dict, timeout=
                 seasonLinkPath = opt.attrib["value"]
 
         if seasonLinkPath == "":
-            print("Could not get link for {} on page {}".format(seasonName, leagueUrl))
+            print("Could not get link for {} on page {}".format(seasonName, url))
             continue 
 
         seasonLink = JoinUrlPath(baseUrl, seasonLinkPath)
         if seasonLink != url:
-            r = sess.get(seasonLink, verify=False, timeout=timeout)
+            r, err = sess.get(seasonLink, verify=False, timeout=timeout)
+            if err:
+                continue
+                
             doc = html.fromstring(r.text)
+            time.sleep(delay)
             
-        matchTables = doc.xpath(".//table/")
+        matchTables = doc.xpath(".//div[@id=\"all0\"]/table")
+        
         for table in matchTables:
-            anchor = table.xpath(".//tr/th/a/")
+            anchor = table.xpath(".//tr/th/a")
+            if len(anchor) == 0:
+                continue
+        
+            assert(len(anchor) == 1)
+            anchor = anchor[0]
+            
             assert("href" in anchor.attrib)
             tLink = anchor.attrib["href"]
             tName = anchor.text
             
-            if tLink == leaguesPathes[league]:  
-                pass
-    
+            if tLink != leaguesPathes[league]:
+                continue
+                
+            # assert(tLink == leaguesPathes[league])
+            teamLeagueMatches = ParseLeagueMatchTable(table, season.teams)
+            if teamLeagueMatches == None:
+                print("Some strange error happened on", tLink," for ", tName)
+                continue
+                
+            matches.update(set(teamLeagueMatches))
+                
+    return list(matches)
+
+def LoadSeasonMatches(year1:int, year2:int, leagues:list, leaguesPathes:dict) -> (Season, list):
+    #leagues, leaguesPathes = LoadLeagues(baseUrl, sess)
+    season, teamPathes = LoadSeason(leaguesPathes, year1, year2)
+    matches = LoadTeamMatches(season, teamPathes, leaguesPathes)
+    return matches, season
