@@ -59,13 +59,13 @@ class Team(object):
         
         
 class Season(object):
-    def __init__(self, year1, year2, leagues=set(), teams=set(), leaguesTeams=list()):
+    def __init__(self, year1, year2): #leagues=set(), teams=set(), leaguesTeams=list()):
         self.name = "/".join((str(year1), str(year2)[2:]))
         self.year1 = year1 
         self.year2 = year2
-        self.leagues = leagues
-        self.teams = teams
-        self.leaguesTeams = leaguesTeams
+        self.leagues = set()#leagues
+        self.teams = set()#teams
+        self.leaguesTeams = list()#leaguesTeams
         
     def AddTeam(self, team: Team, league: League):
         self.teams.add(team)
@@ -99,6 +99,21 @@ class Match(object):
         self.team2Score = team2Score
         self.flags = flags
         
+    def __str__(self):
+        return ".".join((str(self.team1), str(self.team2), str(self.date.strftime("%Y-%m-%d")), str(self.team1Score), str(self.team2Score)))
+    
+    def __hash__(self):
+        return hash(self.__str__())
+    
+    def __eq__(self, other):
+        selfTuple  = (self.team1, self.team2, self.date, self.team1Score, self.team2Score, self.flags)
+        selfTuple2 = (self.team2, self.team1, self.date, self.team2Score, self.team1Score, self.flags)
+        otherTuple = (other.team1, other.team2, other.date, other.team1Score, other.team2Score, other.flags)
+        return (selfTuple == otherTuple) or (selfTuple2 == otherTuple)
+    
+    def __ne__(self, other):
+        return not __eq__(self, other)
+        
 def packMatchFlags(isLeague, isCup, isPlayoff, isFriendly, isUpperDivision, isLowerDivision):
     flags = 1 # lower bit always set to 1, to check that flags was initialized
     flags |= int(isLeague) << 1
@@ -112,7 +127,6 @@ def packMatchFlags(isLeague, isCup, isPlayoff, isFriendly, isUpperDivision, isLo
 def isLeague(match):
     if 1 & match.flags:
         return (1 << 1) & flags
-    
     return -1
 
 def isCup(match):
@@ -152,6 +166,12 @@ def isLowerDivision(match):
 
 def isInternational(match):
     return int(match.team1.country != match.team2.country)
+
+def getSeason(date):
+    currentYear = date.year
+    if date.month <= 6:
+        return "/".join((str(currentYear-1)[2:],str(currentYear)[2:]))
+    return "/".join((str(currentYear)[2:],str(currentYear+1)[2:]))
 
 def FindTeamByName(teamName:str, teams: list, country=None) -> list:
     candidates = list()
@@ -253,7 +273,7 @@ def LoadLeagues(url: str, sess:Session, timeout=5) -> (list, dict):
             leagues.append(league)
     
     return leagues, leaguesPathes
-    
+
 extractDataKeyRe = re.compile('''\"data_key\"\s*\:\s*\"([^\"]+)\"''')
 baseUrl = "https://24score.pro/"
 backendLoadPageDataUrl = JoinUrlPath(baseUrl, "/backend/load_page_data.php")
@@ -303,10 +323,13 @@ def LoadLeagueTeams(url: str, timeout=5) -> (list, list):
         teamNames.append(team.text)
         
     return teamNames, teamPathes
-
+    
+    
 def LoadSeason(leaguesPathes: dict, year1: int, year2:int, timeout=5, delay=1) -> (Season, dict):
     assert(year2 > year1)
     season = Season(year1, year2)
+    seasonLeaguesPathes = dict()
+
     seasonName = season.name
     teamPathes = dict()
 
@@ -329,6 +352,7 @@ def LoadSeason(leaguesPathes: dict, year1: int, year2:int, timeout=5, delay=1) -
             print("Could not get link for {} on page {}".format(seasonName, leagueUrl))
             continue 
             
+        seasonLeaguesPathes[league] = seasonLinkPath           
         seasonLink = JoinUrlPath(baseUrl, seasonLinkPath)
         leagueTeamNames, teamLinks = LoadLeagueTeams(seasonLink)
         time.sleep(delay)
@@ -340,9 +364,9 @@ def LoadSeason(leaguesPathes: dict, year1: int, year2:int, timeout=5, delay=1) -
             teamPathes[team] = teamLinks[i]
             season.AddTeam(team, league)
             
-    return season, teamPathes
+    return season, teamPathes, seasonLeaguesPathes
 
-matchRe = re.compile("(\d{2}\.\d{2}\.\d{4})\s*([^\-]+)\-\s*([^\d]+)\s*(\d)\:(\d)")
+    matchRe = re.compile("(\d{2}\.\d{2}\.\d{4})\s*([^\-]+)\-\s*([^\d]+)\s*(\d)\:(\d)")
 
 def GetAllTextFromHtmlElement(node: HtmlElement, filterFunc=None) -> list:
     text = list()
@@ -464,6 +488,7 @@ def LoadTeamMatches(season:Season, teamPathes:dict, leaguesPathes:dict, timeout=
 
         seasonLink = JoinUrlPath(baseUrl, seasonLinkPath)
         if seasonLink != url:
+            print(url, seasonLink)
             r, err = sess.get(seasonLink, verify=False, timeout=timeout)
             if err:
                 continue
@@ -486,10 +511,15 @@ def LoadTeamMatches(season:Season, teamPathes:dict, leaguesPathes:dict, timeout=
             tName = anchor.text
             
             if tLink != leaguesPathes[league]:
+                print(tLink, leaguesPathes[league])
                 continue
                 
             # assert(tLink == leaguesPathes[league])
             teamLeagueMatches = ParseLeagueMatchTable(table, season.teams)
+            
+            for m in teamLeagueMatches:
+                print(m)
+                
             if teamLeagueMatches == None:
                 print("Some strange error happened on", tLink," for ", tName)
                 continue
@@ -499,7 +529,80 @@ def LoadTeamMatches(season:Season, teamPathes:dict, leaguesPathes:dict, timeout=
     return list(matches)
 
 def LoadSeasonMatches(year1:int, year2:int, leagues:list, leaguesPathes:dict) -> (Season, list):
-    #leagues, leaguesPathes = LoadLeagues(baseUrl, sess)
-    season, teamPathes = LoadSeason(leaguesPathes, year1, year2)
-    matches = LoadTeamMatches(season, teamPathes, leaguesPathes)
+    season, teamPathes, seasonLeaguePathes = LoadSeason(leaguesPathes, year1, year2)
+    print(seasonLeaguePathes)
+
+    matches = LoadTeamMatches(season, teamPathes, seasonLeaguePathes)
+    
     return matches, season
+
+def GetDrawSeries(teamMatches: list) -> (list, tuple):
+    teamMatches = sorted(teamMatches, key=lambda x: x.date)
+    drawSeries = list()   
+    currentSeries = 0 # TODO: Get data from past season
+    
+    for tm in teamMatches:
+        if tm.team1Score == tm.team2Score:
+            drawSeries.append((currentSeries, tm.date, tm.team1Score))
+            print(drawSeries[-1])
+            currentSeries = 0
+        else:
+            currentSeries += 1
+        
+    return drawSeries, (currentSeries, teamMatches[-1].date)
+    
+def GetTeamsDrawSeries(seasons, matches) -> (dict, list):
+    selectedTeams = set()
+    selectedLeagues = set()
+    teamsDrawSeries = dict()
+    teamsLastSeries = list()
+    
+    # sort seasons by years, first is the last
+    seasons = sorted(seasons, key=lambda x: x.year2, reverse=True)
+    
+    for s in seasons:
+        selectedLeagues.update(s.leagues)
+        
+    for league in selectedLeagues:
+        leagueTeams = set([i[1] for i in filter(lambda x: x[0] == league, seasons[0].leaguesTeams)])
+        
+        for s in seasons[1:]:
+            leagueTeams = leagueTeams.intersection(set([i[1] for i in filter(lambda x: x[0] == league, s.leaguesTeams)]))
+        
+        selectedTeams.update(leagueTeams)
+        
+    for team in selectedTeams:
+        teamMatches = list(set(filter(lambda x: x.team1 == team or x.team2 == team, matches)))
+        
+        if len(teamMatches) == 0:
+            print("No team matches for: ", team)
+            continue
+        
+        teamDrawSeries, lastSeries = GetDrawSeries(teamMatches)
+        teamsDrawSeries[team] = teamDrawSeries + [lastSeries]
+        
+    return teamsDrawSeries
+
+def main():
+    matches1, s1 = LoadSeasonMatches(2019, 2020, selectedLeagues, selectedLeaguesPathes)
+    matches2, s2 = LoadSeasonMatches(2018, 2019, selectedLeagues, selectedLeaguesPathes)
+    matches3, s3 = LoadSeasonMatches(2017, 2018, selectedLeagues, selectedLeaguesPathes)
+
+    allMatches = set()
+    allMatches.update(matches1)
+    allMatches.update(matches2)
+    allMatches.update(matches3)
+
+    seasons=[s1, s2, s3]
+    tds = GetTeamsDrawSeries([s1,s2,s3], list(allMatches))
+
+    for team in tds:
+        ls = tds[team][-1]
+        ds = tds[team][:-1]
+        league = FindLeagueByTeam(team, seasons[0])
+        league = league[0]
+    
+        print("\t".join((team.country,league.name, team.name, str(max([i[0] for i in ds])), str(ls[0]))))
+
+if __name__ == "__main__":
+    main()
